@@ -178,14 +178,8 @@ type MapStateEntry struct {
 // 'cs' is used to keep track of which policy selectors need this entry. If it is 'nil' this entry
 // will become sticky and cannot be completely removed via incremental updates. Even in this case
 // the entry may be overridden or removed by a deny entry.
-func NewMapStateEntry(cs MapStateOwner, derivedFrom labels.LabelArrayList, redirect bool, listener string, deny bool, hasAuth HasAuthType, authType AuthType) MapStateEntry {
-	var proxyPort uint16
-	if redirect {
-		// Any non-zero value will do, as the callers replace this with the
-		// actual proxy listening port number before the entry is added to the
-		// actual bpf map.
-		proxyPort = 1
-	} else {
+func NewMapStateEntry(cs MapStateOwner, derivedFrom labels.LabelArrayList, proxyPort uint16, listener string, deny bool, hasAuth HasAuthType, authType AuthType) MapStateEntry {
+	if proxyPort == 0 {
 		listener = ""
 	}
 
@@ -779,7 +773,7 @@ func (ms *mapState) denyPreferredInsertWithChanges(newKey Key, newEntry MapState
 					newKeyCpy := newKey
 					newKeyCpy.DestPort = k.DestPort
 					newKeyCpy.Nexthdr = k.Nexthdr
-					l3l4DenyEntry := NewMapStateEntry(newKey, newEntry.DerivedFromRules, false, "", true, DefaultAuthType, AuthTypeDisabled)
+					l3l4DenyEntry := NewMapStateEntry(newKey, newEntry.DerivedFromRules, 0, "", true, DefaultAuthType, AuthTypeDisabled)
 					ms.addKeyWithChanges(newKeyCpy, l3l4DenyEntry, changes)
 					// L3-only entries can be deleted incrementally so we need to track their
 					// effects on other entries so that those effects can be reverted when the
@@ -858,7 +852,7 @@ func (ms *mapState) denyPreferredInsertWithChanges(newKey Key, newEntry MapState
 					denyKeyCpy := k
 					denyKeyCpy.DestPort = newKey.DestPort
 					denyKeyCpy.Nexthdr = newKey.Nexthdr
-					l3l4DenyEntry := NewMapStateEntry(k, v.DerivedFromRules, false, "", true, DefaultAuthType, AuthTypeDisabled)
+					l3l4DenyEntry := NewMapStateEntry(k, v.DerivedFromRules, 0, "", true, DefaultAuthType, AuthTypeDisabled)
 					ms.addKeyWithChanges(denyKeyCpy, l3l4DenyEntry, changes)
 					// L3-only entries can be deleted incrementally so we need to track their
 					// effects on other entries so that those effects can be reverted when the
@@ -991,7 +985,7 @@ func (ms *mapState) authPreferredInsert(newKey Key, newEntry MapStateEntry, feat
 						newKeyCpy := k
 						newKeyCpy.DestPort = newKey.DestPort
 						newKeyCpy.Nexthdr = newKey.Nexthdr
-						l3l4AuthEntry := NewMapStateEntry(k, v.DerivedFromRules, false, newEntry.Listener, false, DefaultAuthType, v.AuthType)
+						l3l4AuthEntry := NewMapStateEntry(k, v.DerivedFromRules, 0, newEntry.Listener, false, DefaultAuthType, v.AuthType)
 						l3l4AuthEntry.DerivedFromRules.MergeSorted(newEntry.DerivedFromRules)
 						l3l4State.allows[newKeyCpy] = l3l4AuthEntry
 					}
@@ -1044,7 +1038,7 @@ func (ms *mapState) authPreferredInsert(newKey Key, newEntry MapStateEntry, feat
 						newKeyCpy := newKey
 						newKeyCpy.DestPort = k.DestPort
 						newKeyCpy.Nexthdr = k.Nexthdr
-						l3l4AuthEntry := NewMapStateEntry(newKey, newEntry.DerivedFromRules, false, v.Listener, false, DefaultAuthType, newEntry.AuthType)
+						l3l4AuthEntry := NewMapStateEntry(newKey, newEntry.DerivedFromRules, 0, v.Listener, false, DefaultAuthType, newEntry.AuthType)
 						l3l4AuthEntry.DerivedFromRules.MergeSorted(v.DerivedFromRules)
 						ms.addKeyWithChanges(newKeyCpy, l3l4AuthEntry, changes)
 						// L3-only entries can be deleted incrementally so we need to track their
@@ -1163,7 +1157,7 @@ func (ms *mapState) AddVisibilityKeys(e PolicyOwner, redirectPort uint16, visMet
 		TrafficDirection: direction.Uint8(),
 	}
 
-	entry := NewMapStateEntry(nil, visibilityDerivedFrom, true, "", false, DefaultAuthType, AuthTypeDisabled)
+	entry := NewMapStateEntry(nil, visibilityDerivedFrom, redirectPort, "", false, DefaultAuthType, AuthTypeDisabled)
 	entry.ProxyPort = redirectPort
 
 	_, haveAllowAllKey := ms.Get(allowAllKey)
@@ -1225,7 +1219,7 @@ func (ms *mapState) AddVisibilityKeys(e PolicyOwner, redirectPort uint16, visMet
 				if _, ok := ms.Get(k2); !ok {
 					d2 := labels.LabelArrayList{visibilityDerivedFromLabels}
 					d2.MergeSorted(v.DerivedFromRules)
-					v2 := NewMapStateEntry(k, d2, true, "", false, v.hasAuthType, v.AuthType)
+					v2 := NewMapStateEntry(k, d2, redirectPort, "", false, v.hasAuthType, v.AuthType)
 					v2.ProxyPort = redirectPort
 					e.PolicyDebug(logrus.Fields{
 						logfields.BPFMapKey:   k2,
@@ -1241,7 +1235,7 @@ func (ms *mapState) AddVisibilityKeys(e PolicyOwner, redirectPort uint16, visMet
 				//    key add the corresponding L3/L4 DENY key if no L3/L4
 				//    key already exists.
 				if _, ok := ms.Get(k2); !ok {
-					v2 := NewMapStateEntry(k, v.DerivedFromRules, false, "", true, DefaultAuthType, AuthTypeDisabled)
+					v2 := NewMapStateEntry(k, v.DerivedFromRules, 0, "", true, DefaultAuthType, AuthTypeDisabled)
 					e.PolicyDebug(logrus.Fields{
 						logfields.BPFMapKey:   k2,
 						logfields.BPFMapValue: v2,
@@ -1269,7 +1263,7 @@ func (ms *mapState) determineAllowLocalhostIngress() {
 				labels.NewLabel(LabelKeyPolicyDerivedFrom, LabelAllowLocalHostIngress, labels.LabelSourceReserved),
 			},
 		}
-		es := NewMapStateEntry(nil, derivedFrom, false, "", false, ExplicitAuthType, AuthTypeDisabled) // Authentication never required for local host ingress
+		es := NewMapStateEntry(nil, derivedFrom, 0, "", false, ExplicitAuthType, AuthTypeDisabled) // Authentication never required for local host ingress
 		ms.denyPreferredInsert(localHostKey, es, nil, allFeatures)
 		if !option.Config.EnableRemoteNodeIdentity {
 			var isHostDenied bool
@@ -1280,7 +1274,7 @@ func (ms *mapState) determineAllowLocalhostIngress() {
 					labels.NewLabel(LabelKeyPolicyDerivedFrom, LabelAllowRemoteHostIngress, labels.LabelSourceReserved),
 				},
 			}
-			es := NewMapStateEntry(nil, derivedFrom, false, "", isHostDenied, ExplicitAuthType, AuthTypeDisabled) // Authentication never required for remote node ingress
+			es := NewMapStateEntry(nil, derivedFrom, 0, "", isHostDenied, ExplicitAuthType, AuthTypeDisabled) // Authentication never required for remote node ingress
 			ms.denyPreferredInsert(localRemoteNodeKey, es, nil, allFeatures)
 		}
 	}
@@ -1303,7 +1297,7 @@ func (ms *mapState) allowAllIdentities(ingress, egress bool) {
 				labels.NewLabel(LabelKeyPolicyDerivedFrom, LabelAllowAnyIngress, labels.LabelSourceReserved),
 			},
 		}
-		ms.allows[keyToAdd] = NewMapStateEntry(nil, derivedFrom, false, "", false, ExplicitAuthType, AuthTypeDisabled)
+		ms.allows[keyToAdd] = NewMapStateEntry(nil, derivedFrom, 0, "", false, ExplicitAuthType, AuthTypeDisabled)
 	}
 	if egress {
 		keyToAdd := Key{
@@ -1317,7 +1311,7 @@ func (ms *mapState) allowAllIdentities(ingress, egress bool) {
 				labels.NewLabel(LabelKeyPolicyDerivedFrom, LabelAllowAnyEgress, labels.LabelSourceReserved),
 			},
 		}
-		ms.allows[keyToAdd] = NewMapStateEntry(nil, derivedFrom, false, "", false, ExplicitAuthType, AuthTypeDisabled)
+		ms.allows[keyToAdd] = NewMapStateEntry(nil, derivedFrom, 0, "", false, ExplicitAuthType, AuthTypeDisabled)
 	}
 }
 
