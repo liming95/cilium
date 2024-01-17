@@ -386,6 +386,8 @@ Changed Metrics
   met (e.g: NodePort service implementation in BPF is disabled or socket load-balancing
   is disabled), it will fail to initialize and will log an error instead of silently
   fall back to iptables based masquerading.
+* The ``--output`` flag now can be used with ``cilium-dbg encrypt status`` command to
+  return output in JSON or YAML format.
 
 .. _upgrade_cilium_cli_helm_mode:
 
